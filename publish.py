@@ -25,7 +25,8 @@ body='\n'.join(out).replace(']]>',']]&gt;')
 now=datetime.datetime.now(zoneinfo.ZoneInfo('Europe/Madrid'))
 pub=email.utils.format_datetime(now)
 dani=['ponedeljak','utorak','sreda','četvrtak','petak','subota','nedelja']
-title=f"Jutarnji izveštaj Srbija – {dani[now.weekday()]}, {now.day}. {now.month}. {now.year}."
+kind=sys.argv[2] if len(sys.argv)>2 else "Jutarnji"
+title=f"{kind} izveštaj Srbija – {dani[now.weekday()]}, {now.day}. {now.month}. {now.year}."
 xml=f'''<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
 <channel>
