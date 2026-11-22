@@ -1,0 +1,10 @@
+Twemoji graphics
+Copyright 2014-2021 Twitter, Inc. and other contributors
+Copyright 2022-present Jason Sofonia & Justine De Caires
+https://github.com/jdecked/twemoji
+
+Graphics licensed under Creative Commons Attribution 4.0 International (CC-BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+These 72x72 PNG assets are from Twemoji v17.0.3 and are hosted here so
+e-readers can load them from this same GitHub Pages site (no third-party CDN).
