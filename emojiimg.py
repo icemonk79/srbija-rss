@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Replace emoji and pictographic symbols with hosted Twemoji <img> tags,
-and map other risky glyphs (arrows, minus sign, etc.) to ASCII / Latin-1.
+"""Replace emoji and pictographic symbols with embedded Twemoji <img> tags
+(data:image/png;base64 URIs of 24x24 PNGs), and map other risky glyphs
+(arrows, minus sign, etc.) to ASCII / Latin-1.
 
 Twemoji graphics: Copyright 2014-2021 Twitter, Inc. and other contributors;
 Copyright 2022-present Jason Sofonia & Justine De Caires.
 Licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
 Source: https://github.com/jdecked/twemoji (v17.0.3), 72x72 PNG assets.
+Icons are downscaled and quantized at publish time so the feed stays small
+and e-readers that cannot fetch remote images can still render them.
 """
 from __future__ import annotations
 
+import base64
+import html as htmlmod
+import io
 import os
 import re
 import shutil
@@ -87,6 +93,31 @@ LABEL_MAP = {
     "\u2612": "[X]",
 }
 
+# Short Serbian (ASCII) alt text for section-header icons; decorative icons
+# keep an empty alt. These are a fallback if the image does not render.
+ALT_BY_FILE = {
+    "26a1.png": "HITNO",
+    "1f525.png": "ISPADI",
+    "1f6e1.png": "BEZBEDNOST",
+    "1fa9f.png": "WSUS",
+    "1f6f0.png": "POMORSKI IT",
+    "1f3e2.png": "MICROSOFT",
+    "1f427.png": "LINUX",
+    "1f4bb.png": "HARDVER",
+    "1f4b0.png": "KRIPTO",
+    "1f393.png": "SKOLICA",
+    "1f4d6.png": "SKRACENICE",
+    "2b50.png": "NAJVAZNIJE",
+    "1f3db.png": "POLITIKA",
+    "1f4b8.png": "POREZI",
+    "1f9fe.png": "DZEP",
+    "1f52d.png": "SLEDI",
+    "1f4ca.png": "TRZISTE",
+    "1f3af.png": "NIVOI",
+    "1f9ed.png": "POKRETACI",
+    "1f500.png": "SCENARIJI",
+}
+
 # Common section-header and status emoji to pre-seed into each repo
 # so a future report still has icons if the cache is missing.
 SEED_CODEPOINTS = """
@@ -121,16 +152,29 @@ https://github.com/jdecked/twemoji
 Graphics licensed under Creative Commons Attribution 4.0 International (CC-BY 4.0):
 https://creativecommons.org/licenses/by/4.0/
 
-These 72x72 PNG assets are from Twemoji v17.0.3 and are hosted here so
-e-readers can load them from this same GitHub Pages site (no third-party CDN).
+These 72x72 PNG assets are from Twemoji v17.0.3. At publish time they are
+downscaled and embedded in the feed as data URIs so e-readers that cannot
+fetch remote images can still display them. The originals are kept here
+for attribution and for rebuilding the feed.
 """
 
 _icon_dir = None
 _base_url = None
+_data_uri_cache: dict[str, str] = {}
+
+# Existing hosted <img> tags from earlier feed versions.
+_HOSTED_IMG = re.compile(
+    r'<img\s+src="https://icemonk79\.github\.io/[^"/]+/icons/([^"]+)"'
+    r'(?:\s+alt="[^"]*")?(?:\s+width="\d+")?(?:\s+height="\d+")?\s*/>'
+)
 
 
 def setup(icon_dir: str, base_url: str, cache_dir: str | None = None) -> None:
-    """Configure output directory and public URL prefix (no trailing slash)."""
+    """Configure output directory and public URL prefix (no trailing slash).
+
+    base_url is kept for compatibility; <img> tags now use data URIs and
+    do not depend on it.
+    """
     global _icon_dir, _base_url, CACHE_DIR
     _icon_dir = icon_dir
     _base_url = base_url.rstrip("/")
@@ -240,10 +284,70 @@ def _short_label(seq: str) -> str:
     return ""
 
 
+def _png_bytes(path: str) -> bytes:
+    """24x24 16-color palette PNG (color + transparency). Falls back to the
+    original file if Pillow is missing or encoding fails.
+
+    A naive LANCZOS RGBA resize is *larger* than the already-optimized 72x72
+    Twemoji assets. JPEG is smaller than that naive PNG but larger than a
+    16-color palette PNG, and it drops transparency. Grayscale PNG is also
+    larger than the palette version and drops color. Palette PNG wins.
+    """
+    try:
+        from PIL import Image
+
+        im = Image.open(path).convert("RGBA")
+        im = im.resize((24, 24), Image.Resampling.LANCZOS)
+        im = im.quantize(
+            colors=16,
+            method=Image.Quantize.FASTOCTREE,
+            dither=Image.Dither.NONE,
+        )
+        buf = io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        data = buf.getvalue()
+        if data and len(data) > 30:
+            return data
+    except Exception:
+        pass
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _data_uri(filename: str) -> str | None:
+    """Return a cached data:image/png;base64 URI for icons/<filename>."""
+    if filename in _data_uri_cache:
+        return _data_uri_cache[filename]
+    if not _icon_dir:
+        return None
+    path = os.path.join(_icon_dir, filename)
+    if not os.path.isfile(path):
+        return None
+    try:
+        raw = _png_bytes(path)
+        uri = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    except Exception:
+        return None
+    _data_uri_cache[filename] = uri
+    return uri
+
+
 def img_tag(filename: str) -> str:
-    return (
-        f'<img src="{_base_url}/{filename}" alt="" width="20" height="20"/>'
-    )
+    uri = _data_uri(filename)
+    if not uri:
+        return htmlmod.escape(ALT_BY_FILE.get(filename, ""), quote=True)
+    alt = htmlmod.escape(ALT_BY_FILE.get(filename, ""), quote=True)
+    return f'<img src="{uri}" alt="{alt}" width="20" height="20"/>'
+
+
+def rewrite_hosted_imgs(text: str) -> str:
+    """Turn previously published remote icon <img> tags into data-URI tags."""
+
+    def repl(m: re.Match[str]) -> str:
+        tag = img_tag(m.group(1))
+        return tag if tag else m.group(0)
+
+    return _HOSTED_IMG.sub(repl, text)
 
 
 def _is_regional(ch: str) -> bool:
@@ -388,8 +492,10 @@ def replace_text(text: str, as_html: bool = True) -> str:
 
 def _render(seq: str, as_html: bool) -> str:
     filename = resolve_icon(seq, download=True)
-    if filename and as_html and _base_url:
-        return img_tag(filename)
+    if filename and as_html and _icon_dir:
+        tag = img_tag(filename)
+        if tag:
+            return tag
     return _short_label(seq)
 
 
@@ -397,7 +503,11 @@ _TAG_SPLIT = re.compile(r"(<[^>]+>)")
 
 
 def replace_html(html: str) -> str:
-    """Replace in text nodes only, leaving existing tags (and URLs in attrs) alone."""
+    """Replace in text nodes only, leaving existing tags (and URLs in attrs) alone.
+
+    Previously published remote icon <img> tags are upgraded to data URIs.
+    """
+    html = rewrite_hosted_imgs(html)
     parts = _TAG_SPLIT.split(html)
     for i, part in enumerate(parts):
         if part.startswith("<"):

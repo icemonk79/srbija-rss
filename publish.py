@@ -2,8 +2,9 @@
 """Usage: publish.py report.md  -> rewrites feed.xml with only this report, commits and pushes.
 
 At publish time, emoji and other pictographic symbols are replaced with small
-hosted <img> tags (Twemoji PNGs under icons/) so e-readers such as PocketBook
-do not show empty squares. Chat/message copies are not modified by this script.
+embedded <img> tags (Twemoji PNGs as data:image URIs) so e-readers such as
+PocketBook that cannot fetch remote images may still show the icons.
+Chat/message copies are not modified by this script.
 """
 import sys,re,html,email.utils,datetime,subprocess,zoneinfo,os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
